@@ -174,6 +174,11 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
 .court-btn:active{opacity:0.8}
 .court-btn.sel-a{background:rgba(212,98,42,0.1);border-color:var(--accent);color:var(--accent)}
 .court-btn.sel-b{background:rgba(74,127,191,0.1);border-color:var(--blue);color:var(--blue)}
+
+
+</style>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
 </head>
 <body>
 <div class="app">
@@ -245,8 +250,14 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
       <!-- 초기화 -->
       <div style="margin-top:8px;padding:14px;background:var(--surface);border-radius:var(--radius);border:1px solid var(--border);box-shadow:var(--shadow)">
         <div style="font-size:0.7rem;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:10px">⚙️ 데이터 관리</div>
+        <button onclick="forcSync()" style="width:100%;padding:13px;background:rgba(90,138,90,0.08);border:1.5px solid rgba(90,138,90,0.3);border-radius:10px;font-family:inherit;font-size:0.85rem;color:#3a6b3a;cursor:pointer;margin-bottom:8px;text-align:left;display:block;-webkit-appearance:none;">
+          🔄 지금 동기화 · 내 데이터를 모두에게 전송
+        </button>
         <button onclick="resetHistory()" style="width:100%;padding:13px;background:transparent;border:1.5px solid var(--border);border-radius:10px;font-family:inherit;font-size:0.85rem;color:var(--muted);cursor:pointer;margin-bottom:8px;text-align:left;display:block;-webkit-appearance:none;">
           🗑️ 경기 기록만 초기화 · 회원·점수 유지
+        </button>
+        <button onclick="resetRanking()" style="width:100%;padding:13px;background:rgba(74,127,191,0.06);border:1.5px solid rgba(74,127,191,0.25);border-radius:10px;font-family:inherit;font-size:0.85rem;color:var(--blue);cursor:pointer;margin-bottom:8px;text-align:left;display:block;-webkit-appearance:none;">
+          🏆 랭킹만 초기화 · 회원 유지, 점수·기록 삭제
         </button>
         <button onclick="resetAll()" style="width:100%;padding:13px;background:rgba(192,57,43,0.06);border:1.5px solid rgba(192,57,43,0.25);border-radius:10px;font-family:inherit;font-size:0.85rem;color:var(--red);cursor:pointer;text-align:left;display:block;-webkit-appearance:none;">
           ⚠️ 전체 초기화 · 회원·점수·기록 모두 삭제
@@ -298,21 +309,41 @@ body{background:var(--bg);color:var(--text);font-family:'Noto Sans KR',sans-seri
 <div class="toast" id="toast"></div>
 
 <script>
-// ── DATE
+
+// ── FIREBASE
+var _fbREF = null;
+var _fbWriteId = 0;
+
 (function(){
-  const D=['일','월','화','수','목','금','토'],n=new Date();
-  document.getElementById('todayDate').textContent=
-    n.getFullYear()+'년 '+(n.getMonth()+1)+'월 '+n.getDate()+'일 ('+D[n.getDay()]+')';
+  try {
+    firebase.initializeApp({
+      apiKey:"AIzaSyAjmQnjEQG_9jeAJJMa-j8u-yk9DJEaOlM",
+      authDomain:"tennis-app-a9ed0.firebaseapp.com",
+      projectId:"tennis-app-a9ed0",
+      storageBucket:"tennis-app-a9ed0.firebasestorage.app",
+      messagingSenderId:"159886442788",
+      appId:"1:159886442788:web:0026ceec63d3cf95a273b1"
+    });
+    _fbREF = firebase.firestore().collection('hanulhoe').doc('data');
+  } catch(e) {}
 })();
 
 // ── STATE
 const KEY='hanulhoe_v3';
 function load(){try{return JSON.parse(localStorage.getItem(KEY)||'{}')}catch{return{}}}
 function save(s){
-  const json=JSON.stringify(s);
+  s.updatedAt=Date.now();
+  var json=JSON.stringify(s);
   localStorage.setItem(KEY,json);
-  // Firebase에도 저장 (실시간 공유)
-  if(window.saveToFirebase) window.saveToFirebase(json);
+  // Firebase에 저장
+  if(_fbREF){
+    _fbWriteId=Date.now();
+    var wid=_fbWriteId;
+    _fbREF.set({json:json, t:wid}).catch(function(){
+      var el=document.getElementById('syncStatus');
+      if(el){el.textContent='⚠️ 저장 실패';el.style.color='#c0392b';}
+    });
+  }
 }
 function getState(){
   const s=load();
@@ -400,13 +431,17 @@ function showTab(id,el){
 }
 
 // ── MEMBERS
+var _addingMember=false;
 function addMember(){
+  if(_addingMember) return;
+  _addingMember=true;
+  setTimeout(function(){_addingMember=false;},500);
   const inp=document.getElementById('memberInput');
   const name=inp.value.trim();
   const div=document.getElementById('memberDiv').value;
-  if(!name) return;
+  if(!name){_addingMember=false;return}
   const s=getState();
-  if(s.members.find(m=>m.name===name)){showToast('이미 등록된 회원입니다');return}
+  if(s.members.find(m=>m.name===name)){showToast('이미 등록된 회원입니다');_addingMember=false;return}
   s.members.push({name,division:div,wins:0,draws:0,losses:0,attendance:0});
   save(s);inp.value='';
   renderMembers();renderArrivalArea();
@@ -432,22 +467,22 @@ function moveMember(name,toDiv){
   save(s);renderMembers();renderArrivalArea();
   showToast(name+' → '+toDiv+'조 이동');
 }
+function memberRows(list,other,cls){
+  if(!list.length) return '<div class="empty-state" style="padding:18px 0"><div class="e-icon">👤</div><div class="e-text">없음</div></div>';
+  return list.map(function(m){
+    return '<div class="player-row"><div class="player-avatar '+cls+'">'+ini(m.name)+'</div><div class="pname">'+m.name+'</div>'+
+      '<button class="btn-ghost blue" onclick="moveMember(\''+m.name+'\',\''+other+'\')">→'+other+'조</button>'+
+      '<button class="btn-ghost red" onclick="delMember(\''+m.name+'\')">삭제</button></div>';
+  }).join('');
+}
 function renderMembers(){
   const s=getState();
   const a=s.members.filter(m=>m.division==='A');
   const b=s.members.filter(m=>m.division==='B');
   document.getElementById('aCnt').textContent='('+a.length+'명)';
   document.getElementById('bCnt').textContent='('+b.length+'명)';
-  function rows(list,other,cls){
-    if(!list.length) return '<div class="empty-state" style="padding:18px 0"><div class="e-icon">👤</div><div class="e-text">없음</div></div>';
-    return list.map(function(m){
-      return '<div class="player-row"><div class="player-avatar '+cls+'">'+ini(m.name)+'</div><div class="pname">'+m.name+'</div>'+
-        '<button class="btn-ghost blue" onclick="moveMember(\''+m.name+'\',\''+other+'\')">→'+other+'조</button>'+
-        '<button class="btn-ghost red" onclick="delMember(\''+m.name+'\')">삭제</button></div>';
-    }).join('');
-  }
-  document.getElementById('listA').innerHTML=rows(a,'B','av-a');
-  document.getElementById('listB').innerHTML=rows(b,'A','av-b');
+  document.getElementById('listA').innerHTML=memberRows(a,'B','av-a');
+  document.getElementById('listB').innerHTML=memberRows(b,'A','av-b');
 }
 
 // ── ARRIVAL
@@ -632,39 +667,128 @@ function checkCourtReady(){
 function confirmCourt(){var sel=window._csel||{};closeCourtModal();generateMatches(sel.A||0,sel.B||0)}
 function closeCourtModal(){document.getElementById('courtModal').style.display='none'}
 
+// buildDiv: 조별 매치 구성 (generateMatches에서 사용)
+function buildDiv(players,div,maxC,newId){
+  if(players.length<4) return null;
+  var courts=Math.min(maxC,Math.floor(players.length/4));
+  var wt=getWaiting(div),priority=players.filter(function(n){return wt.includes(n)});
+  var rest=shuffle(players.filter(function(n){return !wt.includes(n)}));
+  var ordered=priority.concat(rest),matches=[];
+  for(var c=0;c<courts;c++){
+    var four=ordered.slice(c*4,c*4+4);
+    var pair=balancedPair(four);
+    matches.push({id:newId++,team1:pair.team1,team2:pair.team2,result:null,score1:null,score2:null});
+  }
+  return {division:div,matches:matches,waiting:ordered.slice(courts*4),courts:courts,_newId:newId};
+}
+
 // ── GENERATE MATCHES
-function generateMatches(courtsA,courtsB){
+// 균형 팀 구성: 셔플 후 교차 배정 (1,3 vs 2,4) → AA vs BB 방지
+function balancedPair(players){
+  // players 4명: 셔플 후 [0,2] vs [1,3] 교차 배정
+  return {team1:[players[0],players[2]], team2:[players[1],players[3]]};
+}
+
+function generateMatches(courtsA,courtsB,roundIdx){
   const s=getState();const dk=todayKey();var isFun=getMode()==='fun';
   var day=s.history.find(h=>h.dateKey===dk);
   if(!day){day={date:todayLabel(),dateKey:dk,rounds:[]};s.history.push(day)}
-  var nextNum=day.rounds.length+1,newId=0;
+
+  // 재생성 모드: 기존 라운드 교체
+  var isRegen=(roundIdx!==undefined);
+  var nextNum=isRegen?day.rounds[roundIdx].roundNum:day.rounds.length+1;
+
+  var newId=0;
   s.history.forEach(function(h){h.rounds.forEach(function(r){r.divisions.forEach(function(d){newId+=d.matches.length})})});
+  // 재생성 시 해당 라운드 매치 수 제외
+  if(isRegen){
+    var oldDiv=day.rounds[roundIdx].divisions;
+    oldDiv.forEach(function(d){newId-=d.matches.length});
+  }
+
   var divs=[];
   if(isFun){
     var players=window._funPlayers||s.today.map(p=>p.name);
     var courts=Math.min(courtsA||1,Math.floor(players.length/4));
     var sh=shuffle(players),matches=[];
-    for(var c=0;c<courts;c++){var b=c*4;matches.push({id:newId++,team1:[sh[b],sh[b+1]],team2:[sh[b+2],sh[b+3]],result:null,score1:null,score2:null,fun:true})}
+    for(var c=0;c<courts;c++){
+      var four=sh.slice(c*4,c*4+4);
+      var pair=balancedPair(four);
+      matches.push({id:newId++,team1:pair.team1,team2:pair.team2,result:null,score1:null,score2:null,fun:true});
+    }
     divs.push({division:'F',label:'즐겜',matches:matches,waiting:sh.slice(courts*4),courts:courts});
   } else {
-    function buildDiv(players,div,maxC){
-      if(players.length<4) return null;
-      var courts=Math.min(maxC,Math.floor(players.length/4));
-      var wt=getWaiting(div),priority=players.filter(function(n){return wt.includes(n)});
-      var rest=shuffle(players.filter(function(n){return !wt.includes(n)}));
-      var ordered=priority.concat(rest),matches=[];
-      for(var c=0;c<courts;c++){var b=c*4;matches.push({id:newId++,team1:[ordered[b],ordered[b+1]],team2:[ordered[b+2],ordered[b+3]],result:null,score1:null,score2:null})}
-      return {division:div,matches:matches,waiting:ordered.slice(courts*4),courts:courts};
-    }
     var eligA=getEligible('A'),eligB=getEligible('B');
-    var dA=buildDiv(eligA,'A',courtsA||Math.floor(eligA.length/4));
-    var dB=buildDiv(eligB,'B',courtsB||Math.floor(eligB.length/4));
-    if(dA) divs.push(dA);if(dB) divs.push(dB);
+    var rA=buildDiv(eligA,'A',courtsA||Math.floor(eligA.length/4),newId);
+    if(rA){newId=rA._newId;divs.push(rA);}
+    var rB=buildDiv(eligB,'B',courtsB||Math.floor(eligB.length/4),newId);
+    if(rB){newId=rB._newId;divs.push(rB);}
   }
   if(!divs.length){showToast('인원이 부족합니다');return}
-  day.rounds.push({roundNum:nextNum,divisions:divs,mode:isFun?'fun':'rank'});
+
+  if(isRegen){
+    day.rounds[roundIdx]={roundNum:nextNum,divisions:divs,mode:isFun?'fun':'rank'};
+  } else {
+    day.rounds.push({roundNum:nextNum,divisions:divs,mode:isFun?'fun':'rank'});
+  }
   save(s);renderMatchArea();
-  showToast(nextNum+'라운드 매칭 생성!'+(isFun?' 🎮':''));
+  showToast(isRegen?(nextNum+'라운드 다시 생성!'):(nextNum+'라운드 매칭 생성!'+(isFun?' 🎮':'')));
+}
+
+// 라운드 재생성 (결과 미입력 시에만)
+function regenRound(rIdx){
+  const s=getState();const dk=todayKey();
+  var day=s.history.find(h=>h.dateKey===dk);
+  if(!day||!day.rounds[rIdx]) return;
+  var round=day.rounds[rIdx];
+  var hasResult=round.divisions.some(function(d){return d.matches.some(function(m){return m.result})});
+  if(hasResult){showToast('결과가 입력된 경기가 있어 재생성 불가');return}
+
+  var newId=0;
+  s.history.forEach(function(h){h.rounds.forEach(function(r){r.divisions.forEach(function(d){newId+=d.matches.length})})});
+  round.divisions.forEach(function(d){newId-=d.matches.length});
+
+  var divs=[];
+  if(round.mode==='fun'){
+    // 즐겜: 대기자 우선 + 나머지 랜덤
+    var waiting=[], players=[];
+    round.divisions.forEach(function(d){
+      waiting=waiting.concat(d.waiting||[]);
+      d.matches.forEach(function(m){players=players.concat(m.team1,m.team2)});
+    });
+    // 대기자는 앞에, 나머지는 셔플
+    var rest=shuffle(players);
+    var ordered=waiting.concat(rest);
+    var courts=round.divisions[0].courts;
+    var matches=[];
+    for(var c=0;c<courts;c++){
+      var four=ordered.slice(c*4,c*4+4);
+      var pair=balancedPair(four);
+      matches.push({id:newId++,team1:pair.team1,team2:pair.team2,result:null,score1:null,score2:null,fun:true});
+    }
+    divs.push({division:'F',label:'즐겜',matches:matches,waiting:ordered.slice(courts*4),courts:courts});
+  } else {
+    // 랭킹: 조별로 대기자 우선 + 나머지 랜덤
+    round.divisions.forEach(function(div){
+      var waiting=div.waiting||[];
+      var players=[];
+      div.matches.forEach(function(m){players=players.concat(m.team1,m.team2)});
+      var rest=shuffle(players);
+      var ordered=waiting.concat(rest);
+      var courts=div.courts;
+      var matches=[];
+      for(var c=0;c<courts;c++){
+        var four=ordered.slice(c*4,c*4+4);
+        var pair=balancedPair(four);
+        matches.push({id:newId++,team1:pair.team1,team2:pair.team2,result:null,score1:null,score2:null});
+      }
+      divs.push({division:div.division,matches:matches,waiting:ordered.slice(courts*4),courts:courts});
+    });
+  }
+
+  day.rounds[rIdx]={roundNum:round.roundNum,divisions:divs,mode:round.mode};
+  save(s);renderMatchArea();
+  showToast(round.roundNum+'라운드 다시 뽑기 완료! 🔀');
 }
 
 
@@ -742,6 +866,7 @@ function renderMatchArea(){
   }
   day.rounds.forEach(function(round,rIdx){
     var allDone=round.divisions.every(d=>d.matches.every(m=>m.result));
+    var hasAnyResult=round.divisions.some(d=>d.matches.some(m=>m.result));
     var isFunRound=round.mode==='fun';
     html+='<div style="margin-bottom:8px;display:flex;align-items:center;justify-content:space-between">'+
       '<div style="display:flex;align-items:center;gap:6px">'+
@@ -749,6 +874,7 @@ function renderMatchArea(){
       (isFunRound?'<span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(74,127,191,0.1);color:var(--blue)">🎮 즐겜</span>':'<span style="font-size:0.68rem;font-weight:600;padding:2px 8px;border-radius:10px;background:rgba(212,98,42,0.1);color:var(--accent)">🏆 랭킹</span>')+
       '</div>'+
       '<div style="display:flex;gap:6px;align-items:center">'+
+      (!hasAnyResult?'<button onclick="regenRound('+rIdx+')" style="font-size:0.7rem;font-weight:600;padding:3px 10px;border-radius:20px;border:1px solid var(--border);background:var(--bg);color:var(--muted);cursor:pointer;font-family:inherit">🔀 다시 뽑기</button>':'')+
       '<span style="font-size:0.7rem;color:var(--muted)">'+round.divisions.map(d=>(d.label||d.division)+'조 '+d.courts+'코트').join(' · ')+'</span>'+
       (allDone?'<span class="match-status status-done">완료</span>':'<span class="match-status status-wait">진행중</span>')+
       '</div></div>';
@@ -806,15 +932,48 @@ function renderMatchArea(){
   if(past.length){
     html+='<div style="margin-top:22px"><div class="group-label" style="margin-bottom:10px">📅 지난 경기 기록</div>';
     past.forEach(function(d){
-      var total=d.rounds.reduce((a,r)=>a+r.divisions.reduce((b,dv)=>b+dv.matches.length,0),0);
-      var done=d.rounds.reduce((a,r)=>a+r.divisions.reduce((b,dv)=>b+dv.matches.filter(m=>m.result).length,0),0);
-      html+='<div class="list-block" style="margin-bottom:10px;padding:12px 14px"><div style="display:flex;align-items:center;justify-content:space-between">'+
+      // 참여 인원 계산 (중복 제거)
+      var players=new Set();
+      d.rounds.forEach(function(r){
+        r.divisions.forEach(function(dv){
+          dv.matches.forEach(function(m){
+            m.team1.concat(m.team2).forEach(function(n){players.add(n)});
+          });
+          (dv.waiting||[]).forEach(function(n){players.add(n)});
+        });
+      });
+      var modeLabel=d.rounds.length>0&&d.rounds[0].mode==='fun'?'🎮':'🏆';
+      html+='<div class="list-block" style="margin-bottom:10px;padding:12px 14px">'+
+        '<div style="display:flex;align-items:center;justify-content:space-between">'+
         '<div style="font-size:0.88rem;font-weight:600">'+d.date+'</div>'+
-        '<div style="font-size:0.72rem;color:var(--muted)">'+d.rounds.length+'라운드 · '+done+'/'+total+'경기</div></div></div>';
+        '<div style="display:flex;gap:8px;align-items:center">'+
+        '<span style="font-size:0.72rem;color:var(--muted)">'+modeLabel+' '+d.rounds.length+'라운드</span>'+
+        '<span style="font-size:0.72rem;font-weight:600;color:var(--accent)">👤 '+players.size+'명 참여</span>'+
+        '</div></div></div>';
     });
     html+='</div>';
   }
   document.getElementById('matchesArea').innerHTML=html;
+}
+
+function rankRows(list,div){
+  if(!list.length) return '<div class="empty-state" style="padding:20px 0"><div class="e-icon">👤</div><div class="e-text">없음</div></div>';
+  var isA=div==='A';
+  var nums=['🥇','🥈','🥉'],cls=['rn1','rn2','rn3'];
+  return list.map(function(m,i){
+    var rel=isA&&list.length>=4&&i>=list.length-4;
+    var pro=!isA&&i<4;
+    return '<div class="rank-row">'+
+      (rel?'<div class="rank-bar bar-rel"></div>':'')+
+      (pro?'<div class="rank-bar bar-pro"></div>':'')+
+      '<div class="rank-num '+(cls[i]||'rnx')+'">'+(nums[i]||i+1)+'</div>'+
+      '<div class="rank-avatar '+(isA?'av-a':'av-b')+'">'+ini(m.name)+'</div>'+
+      '<div class="rank-info"><div class="rank-name-row"><span class="rank-name">'+m.name+'</span>'+
+      '<span class="dbadge '+(isA?'db-a':'db-b')+'">'+div+'</span>'+
+      (rel?'<span class="tag tag-rel">강등권</span>':'')+(pro?'<span class="tag tag-pro">승격권</span>':'')+
+      '</div><div class="rank-sub">'+m.wins+'승 '+m.draws+'무 '+m.losses+'패 · 출석 '+m.attendance+'회</div></div>'+
+      '<div class="rank-pts">'+pts(m)+'<span>점</span></div></div>';
+  }).join('');
 }
 
 // ── RANK
@@ -822,32 +981,13 @@ function renderRank(){
   const s=getState();
   var a=s.members.filter(m=>m.division==='A').sort((x,y)=>pts(y)-pts(x));
   var b=s.members.filter(m=>m.division==='B').sort((x,y)=>pts(y)-pts(x));
-  function rows(list,div){
-    if(!list.length) return '<div class="empty-state" style="padding:20px 0"><div class="e-icon">👤</div><div class="e-text">없음</div></div>';
-    var isA=div==='A';
-    var nums=['🥇','🥈','🥉'],cls=['rn1','rn2','rn3'];
-    return list.map(function(m,i){
-      var rel=isA&&list.length>=4&&i>=list.length-4;
-      var pro=!isA&&i<4;
-      return '<div class="rank-row">'+
-        (rel?'<div class="rank-bar bar-rel"></div>':'')+
-        (pro?'<div class="rank-bar bar-pro"></div>':'')+
-        '<div class="rank-num '+(cls[i]||'rnx')+'">'+(nums[i]||i+1)+'</div>'+
-        '<div class="rank-avatar '+(isA?'av-a':'av-b')+'">'+ini(m.name)+'</div>'+
-        '<div class="rank-info"><div class="rank-name-row"><span class="rank-name">'+m.name+'</span>'+
-        '<span class="dbadge '+(isA?'db-a':'db-b')+'">'+div+'</span>'+
-        (rel?'<span class="tag tag-rel">강등권</span>':'')+(pro?'<span class="tag tag-pro">승격권</span>':'')+
-        '</div><div class="rank-sub">'+m.wins+'승 '+m.draws+'무 '+m.losses+'패 · 출석 '+m.attendance+'회</div></div>'+
-        '<div class="rank-pts">'+pts(m)+'<span>점</span></div></div>';
-    }).join('');
-  }
   document.getElementById('rankContent').innerHTML=
     '<div class="group"><div class="group-label">A조 랭킹 <span style="color:var(--accent)">('+a.length+'명)</span></div>'+
     (a.length>=4?'<div class="alert-pill ap-rel">🔴 하위 4명은 시즌 종료 시 B조로 강등됩니다</div>':'')+
-    '<div class="rank-card">'+rows(a,'A')+'</div></div>'+
+    '<div class="rank-card">'+rankRows(a,'A')+'</div></div>'+
     '<div class="group"><div class="group-label">B조 랭킹 <span style="color:var(--blue)">('+b.length+'명)</span></div>'+
     (b.length>=4?'<div class="alert-pill ap-pro">🟢 상위 4명은 시즌 종료 시 A조로 승격됩니다</div>':'')+
-    '<div class="rank-card">'+rows(b,'B')+'</div></div>';
+    '<div class="rank-card">'+rankRows(b,'B')+'</div></div>';
 }
 
 // ── SEASON
@@ -935,6 +1075,17 @@ function confirmAction(){
   if(cb) cb();
 }
 
+function forcSync(){
+  var json=localStorage.getItem('hanulhoe_v3');
+  if(!json||!_fbREF){showToast('연결 안됨');return;}
+  _fbWriteId=0; // 내 write ID 초기화해서 다른 기기가 받을 수 있게
+  _fbREF.set({json:json, t:0}).then(function(){
+    showToast('🟢 동기화 완료!');
+  }).catch(function(){
+    showToast('❌ 동기화 실패');
+  });
+}
+
 // ── RESET
 function resetHistory(){
   showConfirm(
@@ -948,6 +1099,22 @@ function resetHistory(){
       renderModeBanner();
       renderToday();
       showToast('경기 기록 초기화 완료');
+    }
+  );
+}
+function resetRanking(){
+  showConfirm(
+    '🏆 랭킹 초기화',
+    '회원은 유지하고 모든 점수와 경기 기록을 삭제합니다.',
+    '초기화',
+    function(){
+      const s=getState();
+      s.members.forEach(function(m){m.wins=0;m.draws=0;m.losses=0;m.attendance=0;});
+      s.history=[];s.today=[];s.attended=[];s.season=1;
+      save(s);
+      document.getElementById('seasonLabel').textContent='시즌 1 종료 →';
+      renderModeBanner();renderMembers();renderToday();renderRank();
+      showToast('랭킹 초기화 완료!');
     }
   );
 }
@@ -981,77 +1148,103 @@ function showToast(msg){
 
 // ── INIT
 (function(){
+  // 날짜 표시
+  var D=['일','월','화','수','목','금','토'],n=new Date();
+  var dateEl=document.getElementById('todayDate');
+  if(dateEl) dateEl.textContent=n.getFullYear()+'년 '+(n.getMonth()+1)+'월 '+n.getDate()+'일 ('+D[n.getDay()]+')';
+
   const s=getState();
   var dk=todayKey();
-  if(s.lastDate&&s.lastDate!==dk){s.today=[];s.attended=[]}
-  s.lastDate=dk;save(s);
+  if(s.lastDate&&s.lastDate!==dk){s.today=[];s.attended=[];}
+  s.lastDate=dk;
+  // Firebase 업로드 없이 로컬에만 저장 (Firebase에서 곧 최신 데이터 받아옴)
+  localStorage.setItem(KEY, JSON.stringify(s));
 })();
 document.getElementById('seasonLabel').textContent='시즌 '+getState().season+' 종료 →';
 renderModeBanner();
 renderToday();
+
+// Firebase 실시간 연결
+(function(){
+  function setStatus(t,c){var el=document.getElementById('syncStatus');if(el){el.textContent=t;el.style.color=c;}}
+  if(!_fbREF){setStatus('🔴 연결 실패','#c0392b');return;}
+  setStatus('🔄 연결 중...','#9e9089');
+
+  _fbREF.onSnapshot(function(snap){
+    setStatus('🟢 실시간 연결됨','#5a8a5a');
+    if(!snap.exists()||!snap.data().json) return;
+    // 내가 방금 쓴 거면 무시 (1.5초 이내)
+    if(snap.data().t && snap.data().t === _fbWriteId) return;
+    // 다른 기기 데이터 반영
+    try{
+      localStorage.setItem('hanulhoe_v3', snap.data().json);
+      renderModeBanner();
+      renderToday();
+      var mt=document.getElementById('members');
+      if(mt&&mt.classList.contains('active')) renderMembers();
+      var rt=document.getElementById('rank');
+      if(rt&&rt.classList.contains('active')) renderRank();
+    }catch(e){}
+  }, function(){
+    setStatus('🔴 연결 실패','#c0392b');
+  });
+})();
 </script>
 
-<script type="module">
-import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js';
-import { getFirestore, doc, onSnapshot, setDoc } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
+<script>
+(function(){
+  function setStatus(t,c){var el=document.getElementById('syncStatus');if(el){el.textContent=t;el.style.color=c;}}
+  setStatus('🔄 연결 중...','#9e9089');
 
-const firebaseConfig = {
-  apiKey: "AIzaSyAjmQnjEQG_9jeAJJMa-j8u-yk9DJEaOlM",
-  authDomain: "tennis-app-a9ed0.firebaseapp.com",
-  projectId: "tennis-app-a9ed0",
-  storageBucket: "tennis-app-a9ed0.firebasestorage.app",
-  messagingSenderId: "159886442788",
-  appId: "1:159886442788:web:0026ceec63d3cf95a273b1"
-};
+  try{
+    firebase.initializeApp({
+      apiKey:"AIzaSyAjmQnjEQG_9jeAJJMa-j8u-yk9DJEaOlM",
+      authDomain:"tennis-app-a9ed0.firebaseapp.com",
+      projectId:"tennis-app-a9ed0",
+      storageBucket:"tennis-app-a9ed0.firebasestorage.app",
+      messagingSenderId:"159886442788",
+      appId:"1:159886442788:web:0026ceec63d3cf95a273b1"
+    });
+    var db=firebase.firestore();
+    var REF=db.collection('hanulhoe').doc('data');
 
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-const REF = doc(db, 'hanulhoe', 'data');
+    // 내가 방금 저장한 건지 추적 (내 저장 → onSnapshot 무시)
+    var myWriteTime=0;
 
-window._fbReady = false;
-window._ignoreNext = false;
+    // 실시간 수신
+    REF.onSnapshot(function(snap){
+      setStatus('🟢 실시간 연결됨','#5a8a5a');
+      if(!snap.exists()||!snap.data().json) return;
 
-onSnapshot(REF, function(snap) {
-  if (!snap.exists()) return;
-  if (window._ignoreNext) { window._ignoreNext = false; return; }
-  const remote = snap.data();
-  if (remote && remote.json) {
-    try {
-      localStorage.setItem('hanulhoe_v3', remote.json);
-      if (typeof renderModeBanner === 'function') renderModeBanner();
-      if (typeof renderToday === 'function') renderToday();
-      if (typeof renderMembers === 'function') {
-        const membersTab = document.getElementById('members');
-        if (membersTab && membersTab.classList.contains('active')) renderMembers();
-      }
-      if (typeof renderRank === 'function') {
-        const rankTab = document.getElementById('rank');
-        if (rankTab && rankTab.classList.contains('active')) renderRank();
-      }
-      if (!window._fbReady) {
-        window._fbReady = true;
-        const el = document.getElementById('syncStatus');
-        if (el) { el.textContent = '🟢 실시간 연결됨'; el.style.color = '#5a8a5a'; }
-      }
-    } catch(e) {}
+      // 내가 방금 쓴 거면 무시 (2초 이내)
+      if(Date.now()-myWriteTime < 2000) return;
+
+      // 다른 기기에서 온 데이터 → 그냥 바로 반영
+      try{
+        localStorage.setItem('hanulhoe_v3', snap.data().json);
+        if(typeof renderModeBanner==='function') renderModeBanner();
+        if(typeof renderToday==='function') renderToday();
+        var mt=document.getElementById('members');
+        if(mt&&mt.classList.contains('active')&&typeof renderMembers==='function') renderMembers();
+        var rt=document.getElementById('rank');
+        if(rt&&rt.classList.contains('active')&&typeof renderRank==='function') renderRank();
+      }catch(e){}
+    }, function(){
+      setStatus('🔴 연결 실패','#c0392b');
+    });
+
+    // 저장
+    window.fbSave=function(json){
+      myWriteTime=Date.now();
+      REF.set({json:json, t:myWriteTime}).catch(function(){
+        setStatus('⚠️ 저장 실패','#c0392b');
+      });
+    };
+
+  }catch(e){
+    setStatus('🔴 연결 실패','#c0392b');
   }
-});
-
-window.saveToFirebase = async function(jsonStr) {
-  try {
-    window._ignoreNext = true;
-    await setDoc(REF, { json: jsonStr, updatedAt: Date.now() });
-  } catch(e) {
-    window._ignoreNext = false;
-  }
-};
-
-setTimeout(function() {
-  if (!window._fbReady) {
-    const el = document.getElementById('syncStatus');
-    if (el) el.textContent = '🔴 연결 실패';
-  }
-}, 5000);
+})();
 </script>
 
 </body>
